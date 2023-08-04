@@ -4,3 +4,4 @@ runs
 wandb
 *.pth
 *.pt
+__pycache__
