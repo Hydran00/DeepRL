@@ -52,14 +52,15 @@ class VisualGroundingEnv(gym.Env):
     def __init__(self,dataset, num_agent,agent_offset=0,render_mode=None):
         # self.window_size = 512  # The size of the PyGame window
         self.dataset = dataset
-        self.idx = 0
+        self.idx = {"train": 0, "val": 0}
         self.iou = 0
         self.current_iou=0
         self.highest_iou=0
         self.avg_similarity=0
         self.num_agent=num_agent
         self.agent_offset=agent_offset
-        self.idx= self.agent_offset
+        self.idx["train"]= self.agent_offset
+        self.idx["val"]= self.agent_offset
         # self._max_episode_steps=50
         self.steps_num=0
         # _, _, self.width, self.height = RefCOCOg[self.idx]
@@ -95,7 +96,7 @@ class VisualGroundingEnv(gym.Env):
         return #{"agent": self._agent_location, "target": self._target_location}
 
     def _get_info(self, trigger_pressed):
-        return {"pred_bbox": self._agent_location, "target_bbox": self._target_location, "trigger_pressed":trigger_pressed, "img_idx":self.idx}
+        return {"pred_bbox": self._agent_location, "target_bbox": self._target_location, "trigger_pressed":trigger_pressed, "img_idx":self.idx[self.split]}
 
     def compute_vbbox(self):
       area_bbox = self.bbox_width * self.bbox_height
@@ -139,9 +140,13 @@ class VisualGroundingEnv(gym.Env):
         return img_embeddings[np.argmax(similarities)].squeeze(), coordinates[np.argmax(similarities)]
     
     def reset(self, seed=None, options=None):
+        self.split = "train"
+        if options is not None:
+           self.split = options["split"]
         print("IOU : ",str(round(100*self.current_iou,3)),"% with ",self.steps_num) #| AVG_SIMILARITY: ",str(round(100*self.avg_similarity,3))+"%")
         self.np_random, seed = gym.utils.seeding.np_random(seed)
-        embeddings, bbox, width, height, image, sentences = self.dataset[self.idx]
+        
+        embeddings, bbox, width, height, image, sentences = self.dataset[self.idx[self.split],self.split]
         self.sentences = sentences
         self.image=image
         self.img_txt_emb = embeddings
@@ -171,9 +176,9 @@ class VisualGroundingEnv(gym.Env):
         self.steps_num = 0
         # self.idx = self.idx + 1 
         info = self._get_info(False)
-        self.idx +=self.num_agent
-        state =state.cpu().numpy()
-        return state, info
+        self.idx[self.split] +=self.num_agent
+        state =state.detach().cpu().numpy()
+        return state.squeeze(), info
 
     def _update_bbox(self, action):
       ALPHA = 0.2
@@ -264,6 +269,7 @@ class VisualGroundingEnv(gym.Env):
       return
 
     def step(self, action):
+        self.steps_num+=1
         done = False
         reward = 0
         self.iou = self.current_iou
@@ -308,14 +314,13 @@ class VisualGroundingEnv(gym.Env):
         # self.avg_similarity = torch.mean(bbox_similarity).item()
 
         trigger_pressed = False
-        if self.current_iou > VisualGroundingEnv.CONVERGENCE_THRESHOLD or self.steps_num > 49 or action==Actions.ACT_TR.value:
+        # if self.current_iou > VisualGroundingEnv.CONVERGENCE_THRESHOLD or self.steps_num > 49 or action==Actions.ACT_TR.value:
+        if self.steps_num >= 50 or action==Actions.ACT_TR.value:
             done = True
             if action==Actions.ACT_TR.value:
                 trigger_pressed = True
             # if (self.current_iou > VisualGroundingEnv.CONVERGENCE_THRESHOLD):
             #   print(f"IOU% > {VisualGroundingEnv.CONVERGENCE_THRESHOLD*100}% ---> tot = {self.done_counter}")
-        else:
-          self.steps_num+=1
 
         reward = torchvision.ops.generalized_box_iou( self._agent_location, self._target_location )[0].item()
         reward += self._calculate_reward(self.iou,self.current_iou,action==Actions.ACT_TR.value)
@@ -325,7 +330,7 @@ class VisualGroundingEnv(gym.Env):
 
         info = self._get_info(trigger_pressed)
         # state = state.to(DEVICE)
-        state = state.cpu().numpy()
+        state = state.detach().cpu().numpy()
         return state, reward, done, info
 
 
@@ -333,9 +338,9 @@ class VisualGroundingEnv(gym.Env):
 
       if is_stop_action:
         if current_iou > VisualGroundingEnv.CONVERGENCE_THRESHOLD:
-          return 1.0  # Reward for correctly stopping when IoU has improved
+          return 2.0  # Reward for correctly stopping when IoU has improved
         else:
-          return -1.0  # Penalty for stopping when IoU has not improved
+          return -2.0  # Penalty for stopping when IoU has not improved
       else:
         iou_difference = current_iou - previous_iou
         if iou_difference > 0:

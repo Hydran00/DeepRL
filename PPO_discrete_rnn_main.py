@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-from torch.utils.tensorboard import SummaryWriter
 import gym
 import argparse
 import torchvision
@@ -9,10 +8,12 @@ from replaybuffer import ReplayBuffer
 from ppo_discrete_rnn import PPO_discrete_RNN
 from env.env import *
 from utils import *
+import wandb
+
 
 
 class Runner:
-    def __init__(self, args, env_name, number, seed, split="train"):
+    def __init__(self, args, env_name, number, seed):
         self.args = args
         self.env_name = env_name
         self.number = number
@@ -21,10 +22,7 @@ class Runner:
         self.save_model_freq = 10000
         self.save_counter = 0
         self.just_saved=-1
-        if split == "train":
-            self.set_train()
-        elif split == "val":
-            self.set_eval()
+        self.set_dataset()
 
         # Create env
         self.env = gym.make(env_name,dataset=self.dataset,num_agent=1)
@@ -46,7 +44,6 @@ class Runner:
         self.agent = PPO_discrete_RNN(args)
 
         # Create a tensorboard
-        self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}'.format(env_name, number))#, seed))
 
         self.evaluate_rewards = []  # Record the rewards during the evaluating
         self.total_steps = 0
@@ -59,12 +56,8 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
         print("RUNNER INITIALIZED")
 
-    def set_train(self, ):
-        self.dataset = RefCOCOg(data_dir="../",split="train")
-
-
-    def set_eval(self, ):
-        self.dataset = RefCOCOg(data_dir="../",split="val")
+    def set_dataset(self):
+        self.dataset = RefCOCOg(data_dir="../")
 
     def run(self, ):
         evaluate_num = -1  # Record the number of evaluations
@@ -84,7 +77,7 @@ class Runner:
 
     def run_episode(self, ):
         episode_reward = 0
-        s,info = self.env.reset()
+        s,info = self.env.reset(options={"split":"train"})
         if self.args.use_reward_scaling:
             self.reward_scaling.reset()
         self.agent.reset_rnn_hidden()
@@ -105,7 +98,7 @@ class Runner:
             # Store the transition
             self.replay_buffer.store_transition(episode_step, s, v, a, a_logprob, r, dw)
             s = s_
-            if done==True or info["trigger_pressed"]==True:
+            if done==True:
                 break
 
         # An episode is over, store v in the last step
@@ -125,15 +118,18 @@ class Runner:
         iou_step = 0
         for _ in range(self.args.evaluate_times):
             episode_reward, done, info = 0, False, {}
-            s, info = self.env.reset()
+            s, info = self.env.reset(options={"split":"val"})
+            counter = 1
             self.agent.reset_rnn_hidden()
-            while info['trigger_pressed'] == False: #and done == False:
+            while not done and counter<self.args.episode_limit : #and done == False:
                 if self.args.use_state_norm:
                     s = self.state_norm(s, update=False)
                 a, a_logprob = self.agent.choose_action(s, evaluate=True)
                 s_, r, done, info = self.env.step(a)
                 episode_reward += r
                 s = s_
+                # print("trigger is ",done, " | #", counter," steps", counter<=self.args.episode_limit)
+                counter+=1
             evaluate_reward += episode_reward
             iou = torchvision.ops.box_iou(torch.tensor(info["target_bbox"]),torch.tensor(info["pred_bbox"])).item()
             evaluate_iou += iou
@@ -141,16 +137,17 @@ class Runner:
         evaluate_reward = evaluate_reward / self.args.evaluate_times
         self.evaluate_rewards.append(evaluate_reward)
         print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
-        self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward, global_step=self.total_steps)
+        # self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward, global_step=self.total_steps)
         # Save the rewards and models
-        self.writer.add_scalar('evaluate_mean_iou:{}'.format(self.env_name), evaluate_iou/iou_step, global_step=self.total_steps)
+        # self.writer.add_scalar('evaluate_mean_iou:{}'.format(self.env_name), evaluate_iou/iou_step, global_step=self.total_steps)
+        wandb.log( { "mean_iou":evaluate_iou/iou_step, "mean_reward": evaluate_reward},step=self.total_steps )
         if self.total_steps % self.save_model_freq >=  (self.save_model_freq-130) and self.just_saved<=0:
             print("SAVING MODEL")
             self.agent.save_model(self.env_name, self.number, self.total_steps)
             self.just_saved=130
         else:
             self.just_saved-=1
-        np.save('./data_train/PPO_env_{}_number_{}.npy'.format(self.env_name, self.number,self.total_steps), np.array(self.evaluate_rewards))
+        # np.save('./data_train/PPO_env_{}_number_{}.npy'.format(self.env_name, self.number,self.total_steps), np.array(self.evaluate_rewards))
         print("EVALUATION END")
 
 
@@ -160,6 +157,15 @@ if __name__ == '__main__':
         id='VisualGrounding-v0',
         entry_point='env.env:VisualGroundingEnv'
     )
+    run = wandb.init(
+    # Set the project where this run will be logged
+    project="lstm-RL-PPO",
+    # Track hyperparameters and run metadata
+    config={
+        "lstm hidden size": 1024,
+        "batch_size": 512
+    })
+
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
     parser.add_argument("-n", type=int, default=int(1), help=" name index")
     parser.add_argument("--max_train_steps", type=int, default=int(2e6), help=" Maximum number of training steps")
@@ -191,7 +197,7 @@ if __name__ == '__main__':
     env_names = ['VisualGrounding-v0']
     env_index = 0
     for seed in [0, 10, 100]:
-        runner = Runner(args, env_name=env_names[env_index], number=10, seed=seed)
+        runner = Runner(args, env_name=env_names[env_index], number=11, seed=seed)
         runner.run()
     
 

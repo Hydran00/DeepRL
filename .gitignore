@@ -1,2 +1,6 @@
 model
 data_train
+runs
+wandb
+*.pth
+*.pt

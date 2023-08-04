@@ -64,7 +64,7 @@ class Test():
         accuracy_count = 0
         for i in range(0,len(self.dataset)):
             episode_reward, done, info = 0, False, {}
-            s, info = self.env.reset()
+            s, info = self.env.reset(options={"split":"val"})
             # img_idx = info["img_idx"]
             # _,_,_,_, image, sentences= self.dataset[img_idx]
             self.agent.reset_rnn_hidden()
@@ -118,7 +118,6 @@ if __name__ == "__main__":
     parser.add_argument("--set_adam_eps", type=float, default=True, help="Trick 9: set Adam epsilon=1e-5")
     parser.add_argument("--use_tanh", type=float, default=True, help="Trick 10: tanh activation function")
     parser.add_argument("--use_gru", type=bool, default=False, help="Whether to use GRU")
-
     args = parser.parse_args()
     number = 9
     test = Test(args,number)
