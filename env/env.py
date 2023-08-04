@@ -28,7 +28,8 @@ INPUT_SIZE = 1024+1024+5+450
 RNN_SIZE= 1024
 IMG_TXT_EMB_SIZE= 1024
 BBOX_EMB=1024
-
+NUM_SEGMENTS=9
+import math
 @total_ordering
 class Actions(Enum):
   ACT_RT = 0 #Right
@@ -113,34 +114,47 @@ class VisualGroundingEnv(gym.Env):
         res[np.arange(len(history)) + (HISTORY_LENGTH - len(history)), history] = 1
       res = res.reshape((HISTORY_LENGTH * ACT_NUM)).astype(np.float32)
       return res
-
+    
+    def select_best_segment(self,image,sentences,n):
+      width, height = image.size[0], image.size[1]
+      sentences = clip.tokenize(sentences).to(DEVICE)
+      similarities = []
+      img_embeddings = []
+      coordinates = []
+      with torch.no_grad():
+        sentences_emb = self.dataset.model.encode_text(sentences)
+        # print(sentences_emb.shape)
+        sentences_emb = torch.mean(sentences_emb, dim=0,dtype=float).unsqueeze(0)
+        for i in range(n):
+          for j in range(n):
+            x1,y1,x2,y2 = j*width//n, i*height//n, (j+1)*width//n , (i+1)*height//n
+            coordinates.append((x1,y1,x2,y2))
+            image_emb = self.dataset.preprocess(image.crop((x1,y1,x2,y2))).unsqueeze(0).to(DEVICE)
+            image_emb = self.dataset.model.encode_image(image_emb).to(DEVICE)
+            img_embeddings.append(image_emb)
+            # compute similarity between image and sentence
+            similarities.append(torch.cosine_similarity(image_emb, sentences_emb,dim=-1).item())
+        #retrieve the segment with the highest similarity
+        # print("Similarities : ",similarities, "choosing segment ",np.argmax(similarities)," with similarity ",np.max(similarities))
+        return img_embeddings[np.argmax(similarities)].squeeze(), coordinates[np.argmax(similarities)]
+    
     def reset(self, seed=None, options=None):
         print("IOU : ",str(round(100*self.current_iou,3)),"% with ",self.steps_num) #| AVG_SIMILARITY: ",str(round(100*self.avg_similarity,3))+"%")
-
-
         self.np_random, seed = gym.utils.seeding.np_random(seed)
-        # Get embedding of the image with one the multiple descriptions
-        # print("RESET ",self.idx)
         embeddings, bbox, width, height, image, sentences = self.dataset[self.idx]
-        self.senteces = sentences
+        self.sentences = sentences
         self.image=image
         self.img_txt_emb = embeddings
-        img =self.dataset.preprocess(image).unsqueeze(0).to(DEVICE)
-        with torch.no_grad():
-            self.bbox_emb = self.dataset.model.encode_image(img).squeeze(0).to(DEVICE)
-        # print("From ",embeddings.shape, " I extrack random :",sent_idx," -> shape: ",self.img_txt_emb.shape)
+        # dividing image into NUM_SEGMENTS segments (j*k lines) and choosing the one with the highest similarity
+        self.bbox_emb, (self.x1,self.y1,self.x2,self.y2) = self.select_best_segment(self.image, self.sentences,int(math.sqrt(NUM_SEGMENTS)))
+        # print("Image has shape ",self.image.size," and bbox_emb agent is in ", (self.x1,self.y1,self.x2,self.y2))
         self.width = width
         self.height = height
         # Choose the agent's location uniformly
         torch.set_printoptions(threshold=10_000)
-        self.x1 = 0
-        self.y1 = 0
-        self.x2 = self.width - 1
-        self.y2 = self.height -1
-        self.bbox_width = self.width
-        self.bbox_height = self.height
-        self.avg_similarity = 0
-        self._agent_location = torch.tensor([[0, 0, self.x2, self.y2]]).to(DEVICE)
+        self.bbox_width = self.x2 - self.x1
+        self.bbox_height = self.y2 - self.y1
+        self._agent_location = torch.tensor([[self.x1, self.y1, self.x2, self.y2]]).to(DEVICE)
 
         v_bbox = self.compute_vbbox().to(DEVICE)
         bbox_x2 = bbox[0]+bbox[2]
@@ -154,12 +168,6 @@ class VisualGroundingEnv(gym.Env):
         v_hist = torch.zeros(ACT_NUM*HISTORY_LENGTH).to(DEVICE)
         # self.rnn_state = torch.zeros(RNN_SIZE * 2)
         state = torch.cat( (self.img_txt_emb.to(DEVICE),self.bbox_emb,v_bbox,v_hist) ).to(DEVICE)
-        # text = clip.tokenize(sentences).to(DEVICE)
-        # preparing embedding of ground truth and prompt
-        # ground_truth_bbox = RefCOCOg.preprocess(self.image.crop((bbox[0],bbox[1],bbox_x2,bbox_y2))).unsqueeze(0).to(DEVICE)
-        # with torch.no_grad():
-            # self.text_features = RefCOCOg.model.encode_text(text).to(DEVICE)
-            # self.ground_truth_bbox_features =  RefCOCOg.model.encode_image(ground_truth_bbox).to(DEVICE)
         self.steps_num = 0
         # self.idx = self.idx + 1 
         info = self._get_info(False)
@@ -226,12 +234,18 @@ class VisualGroundingEnv(gym.Env):
         self.x1 = 0
       if self.y1 < 0:
         self.y1 = 0
+      if self.x2 < 0:
+        self.x2 = 0
+      if self.y2 < 0:
+        self.y2 = 0
+      if self.x1 >= self.width:
+        self.x1 = self.width - 1
+      if self.y1 >= self.height:
+        self.y1 = self.height - 1
       if self.x2 >= self.width:
         self.x2 = self.width - 1
       if self.y2 >= self.height:
         self.y2 = self.height - 1
-
-      
       # assert self.x1 < self.x2
       # assert self.y1 < self.y2
 
@@ -325,9 +339,9 @@ class VisualGroundingEnv(gym.Env):
       else:
         iou_difference = current_iou - previous_iou
         if iou_difference > 0:
-          return 0.1  # Reward for an action that increases IoU
+          return 0.1 + iou_difference  # Reward for an action that increases IoU
         else:
-          return -0.1  # Penalty for an action that decreases IoU
+          return -0.1 + iou_difference  # Penalty for an action that decreases IoU
 
     def render(self):
         if self.render_mode == "rgb_array":

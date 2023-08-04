@@ -160,7 +160,7 @@ class PPO_discrete_RNN:
     def load_model(self, env_name, number):
         # extract 
         step = max([int(x.split("_")[-1][:-5]) for x in os.listdir("model")])
-        # step =197939
+        step = 649918
         print("LOADING model/PPO_actor_env_{}_number_{}_step_{}k.pth".format(env_name, number, step))
         self.ac.load_state_dict(torch.load("model/PPO_actor_env_{}_number_{}_step_{}k.pth".format(env_name, number, step), map_location=DEVICE))
 

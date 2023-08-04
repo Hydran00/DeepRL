@@ -43,11 +43,10 @@ class Test():
 
 
     def show_result(self,image,sentences,info):
-        gt_x0,gt_y0,gt_x1,gt_y1 = info["target_bbox"][0][0].item(),info["target_bbox"][0][1].item(),info["target_bbox"][0][2].item(),info["target_bbox"][0][3].item()
-        x0,y0,x1,y1 = info["pred_bbox"][0][0].item(),info["pred_bbox"][0][1].item(),info["pred_bbox"][0][2].item(),info["pred_bbox"][0][3].item()
+        gt_x0,gt_y0,gt_x1,gt_y1 = int(info["target_bbox"][0][0].item()),int(info["target_bbox"][0][1].item()),int(info["target_bbox"][0][2].item()),int(info["target_bbox"][0][3].item())
+        x0,y0,x1,y1 = int(info["pred_bbox"][0][0].item()),int(info["pred_bbox"][0][1].item()),int(info["pred_bbox"][0][2].item()),int(info["pred_bbox"][0][3].item())
         #draw predicted bbox
         bbox_img = cv2.rectangle(np.array(image), (int(x0), int(y0)), (int(x1), int(y1)), (255,0,0), 2)
-        print("start :",gt_x0,gt_y0)
         #draw ground truth
         bbox_img = cv2.rectangle(bbox_img,(int(gt_x0),int(gt_y0)),(int(gt_x1),int(gt_y1)), (0,0,255), 2)
         
@@ -66,11 +65,11 @@ class Test():
         for i in range(0,len(self.dataset)):
             episode_reward, done, info = 0, False, {}
             s, info = self.env.reset()
-            img_idx = info["img_idx"]
-            _,_,_,_, image, sentences= self.dataset[img_idx]
+            # img_idx = info["img_idx"]
+            # _,_,_,_, image, sentences= self.dataset[img_idx]
             self.agent.reset_rnn_hidden()
             counter = 0
-            while not info["trigger_pressed"] and counter < 50:
+            while info["trigger_pressed"]==False and  counter < 50:
                 if self.args.use_state_norm:
                     s = self.state_norm(s)
                 a, a_logprob = self.agent.choose_action(s, evaluate=True)
@@ -81,15 +80,17 @@ class Test():
                 counter+=1
                 # print("Episode reward: ",episode_reward)
 
-            # self.show_result(image,sentences,info)
-            iou = torchvision.ops.box_iou(torch.tensor(info["target_bbox"]),torch.tensor(info["pred_bbox"])).item()
+            iou = torchvision.ops.box_iou(info["target_bbox"],info["pred_bbox"]).item()
             iou_count += 1
             if iou > 0.5:
                 accuracy_count += 1
             evaluate_iou += iou
-            print("#{: >5} ->IOU: {: >10} | mean IOU: {: >10} | accuracy: {: >10}".format(i,round(iou, 4),round(evaluate_iou/iou_count,4),round(accuracy_count/iou_count,4)))
-            
+            print("")
+            print("#{: >5} ->BBOX_IOU: {: >10} | mean IOU: {: >10} | accuracy: {: >10}".format(i,round(iou, 4),round(evaluate_iou/iou_count,4),round(accuracy_count/iou_count,4)))
+            # self.show_result(image,sentences,info)
+            print("\n\n#######################################################################à")
             evaluate_reward += episode_reward
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")
     parser.add_argument("--K_epochs", type=int, default=15, help="PPO parameter")
     parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
-    parser.add_argument("--use_state_norm", type=bool, default=True, help="Trick 2:state normalization")
+    parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
     parser.add_argument("--use_reward_scaling", type=bool, default=True, help="Trick 4:reward scaling")
     parser.add_argument("--entropy_coef", type=float, default=0.01, help="Trick 5: policy entropy")
     parser.add_argument("--use_lr_decay", type=bool, default=True, help="Trick 6:learning rate Decay")
@@ -119,6 +120,6 @@ if __name__ == "__main__":
     parser.add_argument("--use_gru", type=bool, default=False, help="Whether to use GRU")
 
     args = parser.parse_args()
-    number = 7
+    number = 9
     test = Test(args,number)
     test.evaluate()

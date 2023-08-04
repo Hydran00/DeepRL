@@ -62,6 +62,7 @@ class Runner:
     def set_train(self, ):
         self.dataset = RefCOCOg(data_dir="../",split="train")
 
+
     def set_eval(self, ):
         self.dataset = RefCOCOg(data_dir="../",split="val")
 
@@ -114,14 +115,7 @@ class Runner:
         self.replay_buffer.store_last_value(episode_step + 1, v)
         # SAVE MODEL
         self.save_counter = self.total_steps
-        # 11932 % 2000 = 1932 -> 0>=1800 
         
-        if self.total_steps % self.save_model_freq >=  (self.save_model_freq-130) and self.just_saved<=0:
-            print("SAVING MODEL")
-            self.agent.save_model(self.env_name, self.number, self.total_steps)
-            self.just_saved=130
-        else:
-            self.just_saved-=1
         return episode_reward, episode_step + 1
     
     def evaluate_policy(self, ):
@@ -133,7 +127,7 @@ class Runner:
             episode_reward, done, info = 0, False, {}
             s, info = self.env.reset()
             self.agent.reset_rnn_hidden()
-            while info['trigger_pressed'] == False and done == False:
+            while info['trigger_pressed'] == False: #and done == False:
                 if self.args.use_state_norm:
                     s = self.state_norm(s, update=False)
                 a, a_logprob = self.agent.choose_action(s, evaluate=True)
@@ -150,6 +144,12 @@ class Runner:
         self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward, global_step=self.total_steps)
         # Save the rewards and models
         self.writer.add_scalar('evaluate_mean_iou:{}'.format(self.env_name), evaluate_iou/iou_step, global_step=self.total_steps)
+        if self.total_steps % self.save_model_freq >=  (self.save_model_freq-130) and self.just_saved<=0:
+            print("SAVING MODEL")
+            self.agent.save_model(self.env_name, self.number, self.total_steps)
+            self.just_saved=130
+        else:
+            self.just_saved-=1
         np.save('./data_train/PPO_env_{}_number_{}.npy'.format(self.env_name, self.number,self.total_steps), np.array(self.evaluate_rewards))
         print("EVALUATION END")
 
@@ -167,8 +167,8 @@ if __name__ == '__main__':
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
     parser.add_argument("--evaluate_times", type=float, default=50, help="Evaluate times")
 
-    parser.add_argument("--batch_size", type=int, default=256, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=16, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
+    parser.add_argument("--mini_batch_size", type=int, default=32, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=1024, help="The number of neurons in hidden layers of the neural network")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
@@ -176,7 +176,7 @@ if __name__ == '__main__':
     parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")
     parser.add_argument("--K_epochs", type=int, default=15, help="PPO parameter")
     parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
-    parser.add_argument("--use_state_norm", type=bool, default=True, help="Trick 2:state normalization")
+    parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
     parser.add_argument("--use_reward_scaling", type=bool, default=True, help="Trick 4:reward scaling")
     parser.add_argument("--entropy_coef", type=float, default=0.01, help="Trick 5: policy entropy")
     parser.add_argument("--use_lr_decay", type=bool, default=True, help="Trick 6:learning rate Decay")
@@ -191,7 +191,7 @@ if __name__ == '__main__':
     env_names = ['VisualGrounding-v0']
     env_index = 0
     for seed in [0, 10, 100]:
-        runner = Runner(args, env_name=env_names[env_index], number=7, seed=seed)
+        runner = Runner(args, env_name=env_names[env_index], number=10, seed=seed)
         runner.run()
     
 
