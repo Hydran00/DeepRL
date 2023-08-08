@@ -22,9 +22,9 @@ from collections import deque
 import cv2
 import numpy
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-HISTORY_LENGTH = 50
+HISTORY_LENGTH = 12
 ACT_NUM = 9
-INPUT_SIZE = 1024+1024+5+450
+INPUT_SIZE = 1024+1024+5+ACT_NUM*HISTORY_LENGTH
 RNN_SIZE= 1024
 IMG_TXT_EMB_SIZE= 1024
 BBOX_EMB=1024
@@ -48,8 +48,8 @@ class Actions(Enum):
 
 class VisualGroundingEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
-    CONVERGENCE_THRESHOLD = 0.7
-    def __init__(self,dataset, num_agent,agent_offset=0,render_mode=None):
+    CONVERGENCE_THRESHOLD = 0.5
+    def __init__(self,dataset, num_agent=1,agent_offset=0,render_mode=None):
         # self.window_size = 512  # The size of the PyGame window
         self.dataset = dataset
         self.idx = {"train": 0, "val": 0}
@@ -61,8 +61,10 @@ class VisualGroundingEnv(gym.Env):
         self.agent_offset=agent_offset
         self.idx["train"]= self.agent_offset
         self.idx["val"]= self.agent_offset
+        self.max_steps_per_episode = 12
         # self._max_episode_steps=50
         self.steps_num=0
+        self.trigger_pressed=False
         # _, _, self.width, self.height = RefCOCOg[self.idx]
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
@@ -122,28 +124,55 @@ class VisualGroundingEnv(gym.Env):
       similarities = []
       img_embeddings = []
       coordinates = []
+      imgs=[]
       with torch.no_grad():
-        sentences_emb = self.dataset.model.encode_text(sentences)
+
+        # Wrapper function used to create the embedding
+        def create_embedding(image, coordinates):
+          image_crop = image.crop(coordinates)
+          imgs.append(image_crop)
+          image_emb = self.dataset.preprocess(image_crop).unsqueeze(0).to(DEVICE)
+          image_emb = self.dataset.model.encode_image(image_emb)
+          return image_emb
+        sentences_emb = self.dataset.model.encode_text(sentences).to(DEVICE)
         # print(sentences_emb.shape)
-        sentences_emb = torch.mean(sentences_emb, dim=0,dtype=float).unsqueeze(0)
+        sentences_emb = torch.mean(sentences_emb, dim=0,dtype=float).unsqueeze(0).to(DEVICE)
         for i in range(n):
           for j in range(n):
             x1,y1,x2,y2 = j*width//n, i*height//n, (j+1)*width//n , (i+1)*height//n
             coordinates.append((x1,y1,x2,y2))
-            image_emb = self.dataset.preprocess(image.crop((x1,y1,x2,y2))).unsqueeze(0).to(DEVICE)
-            image_emb = self.dataset.model.encode_image(image_emb).to(DEVICE)
-            img_embeddings.append(image_emb)
+            img_embeddings.append(create_embedding(image, (x1,y1,x2,y2)))
             # compute similarity between image and sentence
-            similarities.append(torch.cosine_similarity(image_emb, sentences_emb,dim=-1).item())
+            similarities.append(torch.cosine_similarity(img_embeddings[-1], sentences_emb,dim=-1).item())
+            if i+1 < n:
+                y2_new = (i+2)*height//n
+                coordinates.append((x1,y1,x2,y2_new))
+                img_embeddings.append(create_embedding(image,(x1,y1,x2,y2_new)))
+                similarities.append(torch.cosine_similarity(img_embeddings[-1], sentences_emb,dim=-1).item())
+            if j+1 < n:
+                x2_new = (j+2)*width//n
+                coordinates.append((x1,y1,x2_new,y2))
+                img_embeddings.append(create_embedding(image,(x1,y1,x2_new,y2)))
+                similarities.append(torch.cosine_similarity(img_embeddings[-1], sentences_emb,dim=-1).item())
+            if i+1 < n and j+1 < n:
+                y2_new = (i+2)*height//n
+                x2_new = (j+2)*width//n
+                coordinates.append((x1,y1,x2_new,y2_new))
+                img_embeddings.append(create_embedding(image,(x1,y1,x2_new,y2_new)))
+                similarities.append(torch.cosine_similarity(img_embeddings[-1], sentences_emb,dim=-1).item())
         #retrieve the segment with the highest similarity
         # print("Similarities : ",similarities, "choosing segment ",np.argmax(similarities)," with similarity ",np.max(similarities))
+        # imgs[np.argmax(similarities)].show()
         return img_embeddings[np.argmax(similarities)].squeeze(), coordinates[np.argmax(similarities)]
     
     def reset(self, seed=None, options=None):
+        # print("GIOU : ",self.current_iou,"\t\t num steps: ",self.steps_num)
+        # if self.trigger_pressed:
+        #     print("TRIGGER")
         self.split = "train"
         if options is not None:
            self.split = options["split"]
-        print("IOU : ",str(round(100*self.current_iou,3)),"% with ",self.steps_num) #| AVG_SIMILARITY: ",str(round(100*self.avg_similarity,3))+"%")
+        # print("GIOU : ",str(round(100*self.current_iou,3)),"% with ",self.steps_num) #| AVG_SIMILARITY: ",str(round(100*self.avg_similarity,3))+"%")
         self.np_random, seed = gym.utils.seeding.np_random(seed)
         
         embeddings, bbox, width, height, image, sentences = self.dataset[self.idx[self.split],self.split]
@@ -171,12 +200,19 @@ class VisualGroundingEnv(gym.Env):
         self.action_history = deque(maxlen=HISTORY_LENGTH)
         
         v_hist = torch.zeros(ACT_NUM*HISTORY_LENGTH).to(DEVICE)
-        # self.rnn_state = torch.zeros(RNN_SIZE * 2)
         state = torch.cat( (self.img_txt_emb.to(DEVICE),self.bbox_emb,v_bbox,v_hist) ).to(DEVICE)
         self.steps_num = 0
         # self.idx = self.idx + 1 
         info = self._get_info(False)
         self.idx[self.split] +=self.num_agent
+        
+        # reset dataset counter
+        if self.split=="train" and (self.idx[self.split] >= len(self.dataset.annotation_train)-1):
+          random.shuffle(self.dataset.index_list_train)
+          self.idx[self.split] = self.agent_offset
+        if self.split=="val" and (self.idx[self.split] >= len(self.dataset.annotation_val)-1):
+          random.shuffle(self.dataset.index_list_val)
+          self.idx[self.split] = self.agent_offset
         state =state.detach().cpu().numpy()
         return state.squeeze(), info
 
@@ -295,7 +331,7 @@ class VisualGroundingEnv(gym.Env):
         img = self.dataset.preprocess(agent_bbox_crop).unsqueeze(0).to(DEVICE)
         with torch.no_grad():
             self.bbox_emb = self.dataset.model.encode_image(img).squeeze(0).to(DEVICE)
-        # state = torch.cat( (self.img_txt_emb.to(DEVICE),self.bbox_emb,v_bbox) ).to(DEVICE)
+        #state = torch.cat( (self.img_txt_emb.to(DEVICE),self.bbox_emb,v_bbox) ).to(DEVICE)
         state = torch.cat( (self.img_txt_emb.to(DEVICE),self.bbox_emb,v_bbox,v_hist) ).to(DEVICE)
 
         self.current_iou = torchvision.ops.generalized_box_iou( self._agent_location, self._target_location )[0].item()
@@ -312,13 +348,12 @@ class VisualGroundingEnv(gym.Env):
         # similarities = torch.cat((text_similarities,bbox_similarity),dim=0)
 
         # self.avg_similarity = torch.mean(bbox_similarity).item()
-
-        trigger_pressed = False
+        self.trigger_pressed = False
         # if self.current_iou > VisualGroundingEnv.CONVERGENCE_THRESHOLD or self.steps_num > 49 or action==Actions.ACT_TR.value:
-        if self.steps_num >= 50 or action==Actions.ACT_TR.value:
+        if self.steps_num >= self.max_steps_per_episode or action==Actions.ACT_TR.value:
             done = True
             if action==Actions.ACT_TR.value:
-                trigger_pressed = True
+                self.trigger_pressed = True
             # if (self.current_iou > VisualGroundingEnv.CONVERGENCE_THRESHOLD):
             #   print(f"IOU% > {VisualGroundingEnv.CONVERGENCE_THRESHOLD*100}% ---> tot = {self.done_counter}")
 
@@ -328,7 +363,7 @@ class VisualGroundingEnv(gym.Env):
         reward += (-self.iou + 0.98 * self.current_iou)# + self.avg_similarity
         # print("agent in \n",self._agent_location, " target in :\n",self._target_location, "   with action ",action, " iou: ",self.current_iou)
 
-        info = self._get_info(trigger_pressed)
+        info = self._get_info(self.trigger_pressed)
         # state = state.to(DEVICE)
         state = state.detach().cpu().numpy()
         return state, reward, done, info
@@ -338,15 +373,15 @@ class VisualGroundingEnv(gym.Env):
 
       if is_stop_action:
         if current_iou > VisualGroundingEnv.CONVERGENCE_THRESHOLD:
-          return 2.0  # Reward for correctly stopping when IoU has improved
+          return 0.40  # Reward for correctly stopping when IoU has improved
         else:
-          return -2.0  # Penalty for stopping when IoU has not improved
+          return -0.35  # Penalty for stopping when IoU has not improved
       else:
         iou_difference = current_iou - previous_iou
         if iou_difference > 0:
           return 0.1 + iou_difference  # Reward for an action that increases IoU
         else:
-          return -0.1 + iou_difference  # Penalty for an action that decreases IoU
+          return -0.15 + iou_difference  # Penalty for an action that decreases IoU
 
     def render(self):
         if self.render_mode == "rgb_array":

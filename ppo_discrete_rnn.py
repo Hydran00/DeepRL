@@ -157,10 +157,13 @@ class PPO_discrete_RNN:
     def save_model(self, env_name, number, total_steps):
         torch.save(self.ac.state_dict(), "model/PPO_actor_env_{}_number_{}_step_{}k.pth".format(env_name, number, total_steps))
 
-    def load_model(self, env_name, number):
+    def load_model(self, env_name, number,step_num=None):
         # extract 
-        step = max([int(x.split("_")[-1][:-5]) for x in os.listdir("model")])
-        step = 649918
+        if step_num >0:
+            step = step_num
+        else:
+            step = max([int(x.split("_")[-1][:-5]) for x in os.listdir("model")])
+        # step = "final"
         print("LOADING model/PPO_actor_env_{}_number_{}_step_{}k.pth".format(env_name, number, step))
         self.ac.load_state_dict(torch.load("model/PPO_actor_env_{}_number_{}_step_{}k.pth".format(env_name, number, step), map_location=DEVICE))
 

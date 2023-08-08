@@ -76,10 +76,10 @@ class RefCOCOg(Dataset):
         self._load_json()
         self.transform = transform
         self.model, self.preprocess = clip.load("RN50", device=DEVICE)#,jit=False)
-        ret = torch.load("fusion.pt",map_location=DEVICE)
-        self.fusion_embedding_net = FusionEmbedding()
-        self.fusion_embedding_net.load_state_dict(torch.load(RefCOCOg.FUSION_NET_PATH)["model"])
-        self.fusion_embedding_net.eval()
+        # ret = torch.load("fusion.pt",map_location=DEVICE)
+        # self.fusion_embedding_net = FusionEmbedding()
+        # self.fusion_embedding_net.load_state_dict(torch.load(RefCOCOg.FUSION_NET_PATH)["model"])
+        # self.fusion_embedding_net.eval()
         # checkpoint = torch.load("../RN-50-REFCOCOG.pt")
         
         # Use these 3 lines if you use default model setting(not training setting) of the clip. For example, if you set context_length to 100 since your string is very long during training, then assign 100 to checkpoint['model_state_dict']["context_length"] 
@@ -126,9 +126,7 @@ class RefCOCOg(Dataset):
             random_index = self.index_list_train[idx]
             raw = self.annotation_train.iloc[random_index]
         elif split == "val":
-            # be careful to not exceed the validation set size
-            random_index = random.randint(0, len(self.annotation_val)-1)#self.index_list_val[idx]
-            # print("Validation:taking image with id :",random_index)
+            random_index = self.index_list_val[idx]
             raw = self.annotation_val.iloc[random_index]
         else:
             raise ValueError("split must be train or val!")
@@ -175,28 +173,33 @@ class RefCOCOg(Dataset):
         self.annotation = pd.DataFrame(self.annotation)
         self.annotation_train = self.annotation[self.annotation["split"] == "train"]
         self.annotation_val = self.annotation[self.annotation["split"] == "val"]
-        
+
     def _get_vector(self, image, sentences):
             image = self.preprocess(image).unsqueeze(0).to(DEVICE)
+            for i in range(0,len(sentences)):
+                text = "a photo of "+sentences[i]
             text = clip.tokenize(sentences).to(DEVICE)
             with torch.no_grad():
                 image_features = self.model.encode_image(image)
                 text_features = self.model.encode_text(text)
-            # text_features = torch.mean(text_features,dim=0).to(DEVICE)
+            text_features = torch.mean(text_features,dim=0).to(DEVICE)
             text_features = text_features.to(DEVICE)
-            text_selected = text_features[torch.randint(0, text_features.shape[0], (1,))]
+
+            # text_selected = text_features[torch.randint(0, text_features.shape[0], (1,))]
             # bbox = torch.tensor(bbox).unsqueeze(0).to(device)
             # print(f"Image shape: {image_features.shape}, Text shape: {text_features.shape}")
             # Combining embeddings with weighted average
             # out = torch.add(0.4 * image_features ,0.6 * text_features)
             
-            # # Combine image and text features and normalize
-            # product = torch.mul(image_features, text_features)
-            # power = torch.sign(product)* torch.sqrt(torch.abs(product))
-            # out = torch.div(power, torch.norm(power, dim=1).reshape(-1, 1))
-            # out =torch.mean(out,dim=0)
+            # Combine image and text features and normalize
+            product = torch.mul(image_features, text_features)
+            power = torch.sign(product)* torch.sqrt(torch.abs(product))
+            out = torch.div(power, torch.norm(power, dim=1).reshape(-1, 1))
+            out =torch.mean(out,dim=0)
             # print(out.shape, power_out.shape)
             # append bbox
             # print(f"Output shape: {power_out.shape}")
-            out = torch.cat((image_features, text_selected),dim=1).to(DEVICE).unsqueeze(0)
-            return self.fusion_embedding_net(out).squeeze(0).squeeze(0).to(DEVICE)
+            
+            # out = torch.cat((image_features, text_selected),dim=1).to(DEVICE).unsqueeze(0)
+            # return self.fusion_embedding_net(out).squeeze(0).squeeze(0).to(DEVICE)    
+            return out

@@ -9,6 +9,7 @@ import time as tm
 import cv2
 import numpy as np
 from PIL import Image
+VALIDATION_SET_SIZE=2572
 def denormalize(img,x0_norm,y0_norm,x1_norm,y1_norm):
     width = img.shape[1]
     height = img.shape[0]
@@ -24,6 +25,18 @@ def compute_iou(agent, ground_truth):
     print("iou : ",iou)
     return iou
 
+action_dict = {
+    0: 'right',
+    1: 'left',
+    2: 'up',
+    3: 'down',
+    4: 'taller',
+    5: 'fatter',
+    6: 'shorter',
+    7: 'thinner',
+    8: 'trigger'
+}
+
 class Test():
     def __init__(self, args, number):
         self.args = args
@@ -36,9 +49,9 @@ class Test():
         self.env = gym.make("VisualGrounding-v0",dataset=self.dataset,num_agent=1)
         self.args.state_dim = self.env.observation_space.shape[0]
         self.args.action_dim = self.env.action_space.n
-        self.args.episode_limit = 50
+        self.args.episode_limit = self.env.max_steps_per_episode
         self.agent = PPO_discrete_RNN(self.args)
-        self.agent.load_model("VisualGrounding-v0", self.number)
+        self.agent.load_model("VisualGrounding-v0", self.number,self.args.steps_num)
         self.state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
 
 
@@ -55,21 +68,21 @@ class Test():
         Image.fromarray(bbox_img).show()
         print("Groud Truth: {:>5} {:>5} {:>5} {:>5}  |    agent_location: {:>5} {:>5} {:>5} {:>5}".format(gt_x0,gt_y0,gt_x1,gt_y1,x0,y0,x1,y1))
         print("sentences:\n",sentences)
-
-        tm.sleep(3)
+        tm.sleep(7)
 
     def evaluate(self):
         evaluate_reward = 0
         evaluate_iou, iou_count = 0, 0
         accuracy_count = 0
-        for i in range(0,len(self.dataset)):
+        for i in range(0,VALIDATION_SET_SIZE):
             episode_reward, done, info = 0, False, {}
             s, info = self.env.reset(options={"split":"val"})
-            # img_idx = info["img_idx"]
-            # _,_,_,_, image, sentences= self.dataset[img_idx]
+            img_idx = info["img_idx"]
+            _,_,_,_, image, sentences= self.dataset[img_idx,"val"]
             self.agent.reset_rnn_hidden()
             counter = 0
-            while info["trigger_pressed"]==False and  counter < 50:
+            actions=[]
+            while info["trigger_pressed"]==False and  counter < 12:
                 if self.args.use_state_norm:
                     s = self.state_norm(s)
                 a, a_logprob = self.agent.choose_action(s, evaluate=True)
@@ -79,22 +92,24 @@ class Test():
                 s = s_
                 counter+=1
                 # print("Episode reward: ",episode_reward)
-
+                actions.append(action_dict[a])
+                if a == 8:
+                    print("TRIGGER PRESSED")
+                    # self.show_result(image,sentences,info)
             iou = torchvision.ops.box_iou(info["target_bbox"],info["pred_bbox"]).item()
             iou_count += 1
             if iou > 0.5:
                 accuracy_count += 1
             evaluate_iou += iou
-            print("")
             print("#{: >5} ->BBOX_IOU: {: >10} | mean IOU: {: >10} | accuracy: {: >10}".format(i,round(iou, 4),round(evaluate_iou/iou_count,4),round(accuracy_count/iou_count,4)))
-            # self.show_result(image,sentences,info)
-            print("\n\n#######################################################################à")
+            print("Actions: ",actions)
+            print("\n\n#######################################################################")
             evaluate_reward += episode_reward
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
-    parser.add_argument("-n", type=int, default=int(1), help=" name index")
+    parser.add_argument("-n", type=int, default=int(-1), help=" name index")
     parser.add_argument("--max_train_steps", type=int, default=int(2e6), help=" Maximum number of training steps")
     parser.add_argument("--evaluate_freq", type=float, default=5e3, help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
@@ -118,7 +133,11 @@ if __name__ == "__main__":
     parser.add_argument("--set_adam_eps", type=float, default=True, help="Trick 9: set Adam epsilon=1e-5")
     parser.add_argument("--use_tanh", type=float, default=True, help="Trick 10: tanh activation function")
     parser.add_argument("--use_gru", type=bool, default=False, help="Whether to use GRU")
+    parser.add_argument("--steps_num", type=int, default=-1, help="steps number to load weights")
+
     args = parser.parse_args()
-    number = 9
-    test = Test(args,number)
+    if args.n == -1:
+        print("Please input the index of the model")
+        exit()
+    test = Test(args,args.n)
     test.evaluate()
