@@ -17,7 +17,7 @@ class Runner:
         self.number = number
         self.seed = seed
         self.dataset = None
-        self.save_model_freq = 10000
+        self.save_model_freq = self.args.save_model_freq
         self.save_counter = 0
         self.last_save_counter=0
         self.load_last_weights = self.args.resume
@@ -125,7 +125,7 @@ class Runner:
             s, info = self.env.reset(options={"split":"val"})
             counter = 0
             self.agent.reset_rnn_hidden()
-            while done==False and counter<self.args.episode_limit : #and done == False:
+            while done==False and counter<self.args.episode_limit :
                 if self.args.use_state_norm:
                     s = self.state_norm(s, update=False)
                 a, a_logprob = self.agent.choose_action(s, evaluate=True)
@@ -134,6 +134,7 @@ class Runner:
                 s = s_
                 # print("trigger is ",done, " | #", counter," steps", counter<=self.args.episode_limit)
                 counter+=1
+            print("episode_reward: ",episode_reward, "\t|\t num_actions: ",counter)
             evaluate_reward += episode_reward
             iou = torchvision.ops.box_iou(torch.tensor(info["target_bbox"]).to(DEVICE),torch.tensor(info["pred_bbox"]).to(DEVICE)).item()
             evaluate_iou += iou
@@ -141,24 +142,14 @@ class Runner:
         evaluate_reward = evaluate_reward / self.args.evaluate_times
         self.evaluate_rewards.append(evaluate_reward)
         print("total_steps:{} \t mean_iou: {}evaluate_reward:{}".format(self.total_steps,evaluate_iou/iou_step, evaluate_reward))
-        # self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward, global_step=self.total_steps)
         # Save the rewards and models
-        # self.writer.add_scalar('evaluate_mean_iou:{}'.format(self.env_name), evaluate_iou/iou_step, global_step=self.total_steps)
         wandb.log( { "mean_iou":evaluate_iou/iou_step, "mean_reward": evaluate_reward},step=self.total_steps )
         if self.total_steps - self.last_save_counter > self.save_model_freq:
             print("SAVING MODEL")
             self.agent.save_model(self.env_name, self.number, self.total_steps)
-            # self.last_save_counter = self.total_steps
+            self.last_save_counter = self.total_steps
         print("Total steps: ",self.total_steps)
         print("EVALUATION END")
-        # self.agent.save_model(self.env_name, self.number, "final")
-        # if self.total_steps % self.save_model_freq >=  (self.save_model_freq-100) and self.just_saved<=0:
-        #     self.agent.save_model(self.env_name, self.number, self.total_steps)
-        #     self.just_saved=1000
-        # else:
-        #     self.just_saved-=1
-        
-        # np.save('./data_train/PPO_env_{}_number_{}.npy'.format(self.env_name, self.number,self.total_steps), np.array(self.evaluate_rewards))
 
 
 if __name__ == '__main__':
@@ -170,15 +161,15 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
     parser.add_argument("-n", type=int, default=int(-1), help=" name index")
-    parser.add_argument("--max_train_steps", type=int, default=int(3e6), help=" Maximum number of training steps")
+    parser.add_argument("--max_train_steps", type=int, default=int(2e6), help=" Maximum number of training steps")
     parser.add_argument("--evaluate_freq", type=float, default=5e3, help="Evaluate the policy every 'evaluate_freq' steps")
-    parser.add_argument("--save_model_freq", type=int, default=1e4, help="Save frequency")
-    parser.add_argument("--evaluate_times", type=float, default=200, help="Evaluate times")
+    parser.add_argument("--save_model_freq", type=int, default=2e4, help="Save frequency")
+    parser.add_argument("--evaluate_times", type=float, default=100, help="Evaluate times")
 
     parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=64, help="Minibatch size")
+    parser.add_argument("--mini_batch_size", type=int, default=128, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=1024, help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--lr", type=float, default=4e-5, help="Learning rate of actor")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
     parser.add_argument("--epsilon", type=float, default=0.20, help="PPO clip parameter")
@@ -195,6 +186,7 @@ if __name__ == '__main__':
     parser.add_argument("--use_gru", type=bool, default=False, help="Whether to use GRU")
     parser.add_argument("--resume", type=bool, default=False, help="load last weights and resume training from checkpoint")
     parser.add_argument("--steps_num", type=int, default=-1, help="steps number to load weights")
+    parser.add_argument("--transformer", type=bool, default=False, help="whether to use transformer instead of lstm")
     args = parser.parse_args()
     print(args)
     if args.n == -1:
@@ -203,16 +195,17 @@ if __name__ == '__main__':
     if args.steps_num == -1 and args.resume==True:
         print("Please input the steps number of the checkpoint")
         exit()
-    run = wandb.init(project="lstm-RL-PPO",id="12eps",resume=args.resume, config={
+    run = wandb.init(project="lstm-RL-PPO",id="12eps+LSTM+Trigger-Fixed+YOLOProp",resume=args.resume, config={
         "lstm_hidden_size":1024,
         "batch_size":1024,
-        "lr":1e-4,
+        "lr":3e-4,
         "gamma":0.99,
         "mini_batch_size":64,
         "episode_limit":12,
         "use_history":True,
         "epsilon":0.2,
-        "embedding_fusion":False
+        "embedding_fusion":False,
+        "convergence_threshold":0.5
     })
     env_names = ['VisualGrounding-v0']
     env_index = 0

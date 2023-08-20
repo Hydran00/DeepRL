@@ -5,3 +5,5 @@ wandb
 *.pth
 *.pt
 __pycache__
+.vscode
+model

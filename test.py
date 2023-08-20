@@ -46,7 +46,7 @@ class Test():
             )
         self.number = number #id of model
         self.dataset = RefCOCOg("../","val")
-        self.env = gym.make("VisualGrounding-v0",dataset=self.dataset,num_agent=1)
+        self.env = gym.make("VisualGrounding-v0",dataset=self.dataset,num_agent=1,random_validation=False)
         self.args.state_dim = self.env.observation_space.shape[0]
         self.args.action_dim = self.env.action_space.n
         self.args.episode_limit = self.env.max_steps_per_episode
@@ -82,20 +82,22 @@ class Test():
             self.agent.reset_rnn_hidden()
             counter = 0
             actions=[]
+            
             while info["trigger_pressed"]==False and  counter < 12:
                 if self.args.use_state_norm:
                     s = self.state_norm(s)
                 a, a_logprob = self.agent.choose_action(s, evaluate=True)
                 s_, r, done, info = self.env.step(a)
-                # print(info)
+                print("received reward: ",r)
                 episode_reward += r
                 s = s_
                 counter+=1
                 # print("Episode reward: ",episode_reward)
                 actions.append(action_dict[a])
                 if a == 8:
-                    print("TRIGGER PRESSED")
+                    print("Trigger pressed after {} steps".format(counter))
                     # self.show_result(image,sentences,info)
+            print("Episode reward: ",episode_reward)
             iou = torchvision.ops.box_iou(info["target_bbox"],info["pred_bbox"]).item()
             iou_count += 1
             if iou > 0.5:
@@ -112,16 +114,16 @@ if __name__ == "__main__":
     parser.add_argument("-n", type=int, default=int(-1), help=" name index")
     parser.add_argument("--max_train_steps", type=int, default=int(2e6), help=" Maximum number of training steps")
     parser.add_argument("--evaluate_freq", type=float, default=5e3, help="Evaluate the policy every 'evaluate_freq' steps")
-    parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
-    parser.add_argument("--evaluate_times", type=float, default=50, help="Evaluate times")
+    parser.add_argument("--save_model_freq", type=int, default=2e4, help="Save frequency")
+    parser.add_argument("--evaluate_times", type=float, default=100, help="Evaluate times")
 
-    parser.add_argument("--batch_size", type=int, default=256, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=16, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")
+    parser.add_argument("--mini_batch_size", type=int, default=128, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=1024, help="The number of neurons in hidden layers of the neural network")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
-    parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")
+    parser.add_argument("--epsilon", type=float, default=0.20, help="PPO clip parameter")
     parser.add_argument("--K_epochs", type=int, default=15, help="PPO parameter")
     parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
     parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
@@ -133,8 +135,9 @@ if __name__ == "__main__":
     parser.add_argument("--set_adam_eps", type=float, default=True, help="Trick 9: set Adam epsilon=1e-5")
     parser.add_argument("--use_tanh", type=float, default=True, help="Trick 10: tanh activation function")
     parser.add_argument("--use_gru", type=bool, default=False, help="Whether to use GRU")
+    parser.add_argument("--resume", type=bool, default=False, help="load last weights and resume training from checkpoint")
     parser.add_argument("--steps_num", type=int, default=-1, help="steps number to load weights")
-
+    parser.add_argument("--transformer", type=bool, default=False, help="whether to use transformer instead of lstm")
     args = parser.parse_args()
     if args.n == -1:
         print("Please input the index of the model")

@@ -24,45 +24,93 @@ class Actor_Critic_RNN(nn.Module):
     def __init__(self, args):
         super(Actor_Critic_RNN, self).__init__()
         self.use_gru = args.use_gru
+        self.transformer = args.transformer
         self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
         self.actor_rnn_hidden = None
         self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
-        if args.use_gru:
-            print("------use GRU------")
-            self.actor_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
+        self.actor_fc2 = nn.Linear(args.hidden_dim, args.hidden_dim)
+        if args.transformer:
+            self.actor_trans_key = nn.Linear(args.hidden_dim, args.hidden_dim).to(DEVICE)
+            self.actor_trans_value = nn.Linear(args.hidden_dim, args.hidden_dim).to(DEVICE)
+            self.actor_trans_query = nn.Linear(args.hidden_dim, args.hidden_dim).to(DEVICE)
+            self.actor_attention = nn.MultiheadAttention(args.hidden_dim, 8).to(DEVICE)
         else:
-            print("------use LSTM------")
-            self.actor_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
-        self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
+            if args.use_gru:
+                print("------use GRU------")
+                self.actor_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
+            else:
+                print("------use LSTM------")
+                self.actor_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
+        self.actor_fc3 = nn.Linear(args.hidden_dim, args.action_dim)
 
         self.critic_rnn_hidden = None
         self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
-        if args.use_gru:
-            self.critic_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
+        self.critic_fc2 = nn.Linear(args.hidden_dim, args.hidden_dim)
+        
+        if args.transformer:
+            print("------use transformer------")
+            self.critic_trans_key = nn.Linear(args.hidden_dim, args.hidden_dim).to(DEVICE)
+            self.critic_trans_value = nn.Linear(args.hidden_dim, args.hidden_dim).to(DEVICE)
+            self.critic_trans_query = nn.Linear(args.hidden_dim, args.hidden_dim).to(DEVICE)
+            self.critic_attention = nn.MultiheadAttention(args.hidden_dim, 8).to(DEVICE)
         else:
-            self.critic_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
-        self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
+            if args.use_gru:
+                self.critic_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
+            else:
+                self.critic_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim,batch_first=True)
+        self.critic_fc3 = nn.Linear(args.hidden_dim, 1)
 
         if args.use_orthogonal_init:
             print("------use orthogonal init------")
             orthogonal_init(self.actor_fc1)
-            orthogonal_init(self.actor_rnn)
             orthogonal_init(self.actor_fc2, gain=0.01)
+            orthogonal_init(self.actor_fc3)
             orthogonal_init(self.critic_fc1)
-            orthogonal_init(self.critic_rnn)
             orthogonal_init(self.critic_fc2)
+            orthogonal_init(self.critic_fc3)
+            if args.transformer:
+                orthogonal_init(self.actor_trans_key)
+                orthogonal_init(self.actor_trans_value)
+                orthogonal_init(self.actor_trans_query)
+                orthogonal_init(self.actor_attention)
+                orthogonal_init(self.critic_trans_key)
+                orthogonal_init(self.critic_trans_value)
+                orthogonal_init(self.critic_trans_query)
+                orthogonal_init(self.critic_attention)
+            else:
+                orthogonal_init(self.actor_rnn)
+                orthogonal_init(self.critic_rnn)
 
     def actor(self, s):
         s = s.to(DEVICE)
-        s = self.activate_func(self.actor_fc1(s))
-        output, self.actor_rnn_hidden = self.actor_rnn(s, self.actor_rnn_hidden)
-        logit = self.actor_fc2(output)
+        s = self.actor_fc1(s)
+        s = self.activate_func(s)
+        s = self.actor_fc2(s)
+        s = self.activate_func(s)
+        if self.transformer:
+            key = self.actor_trans_key(s)
+            value = self.actor_trans_value(s)
+            query = self.actor_trans_query(s)
+            output, attention_weight = self.actor_attention(query, key, value)
+        else:
+            output, self.actor_rnn_hidden = self.actor_rnn(s, self.actor_rnn_hidden)
+        logit = self.actor_fc3(output)
         return logit
 
     def critic(self, s):
-        s = self.activate_func(self.critic_fc1(s))
-        output, self.critic_rnn_hidden = self.critic_rnn(s, self.critic_rnn_hidden)
-        value = self.critic_fc2(output)
+        s = s.to(DEVICE)
+        s = self.critic_fc1(s)
+        s = self.activate_func(s)
+        s = self.critic_fc2(s)
+        s = self.activate_func(s)
+        if self.transformer:
+            key = self.critic_trans_key(s)
+            value = self.critic_trans_value(s)
+            query = self.critic_trans_query(s)
+            output, attention_weight = self.critic_attention(query, key, value)
+        else:
+            output, self.critic_rnn_hidden = self.critic_rnn(s, self.critic_rnn_hidden)
+        value = self.critic_fc3(output)
         return value
 
 
@@ -84,9 +132,9 @@ class PPO_discrete_RNN:
 
         self.ac = Actor_Critic_RNN(args).cuda()
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5
-            self.optimizer = torch.optim.Adam(self.ac.parameters(), lr=self.lr, eps=1e-5)
+            self.optimizer = torch.optim.AdamW(self.ac.parameters(), lr=self.lr, eps=1e-5)
         else:
-            self.optimizer = torch.optim.Adam(self.ac.parameters(), lr=self.lr)
+            self.optimizer = torch.optim.AdamW(self.ac.parameters(), lr=self.lr)
 
     def reset_rnn_hidden(self):
         self.ac.actor_rnn_hidden = None

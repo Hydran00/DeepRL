@@ -38,7 +38,6 @@ class FusionEmbedding(nn.Module):
     return out
 
 
-
 def denormalize(img,x0_norm,y0_norm,x1_norm,y1_norm):
     width = img.shape[1]
     height = img.shape[0]
@@ -183,19 +182,16 @@ class RefCOCOg(Dataset):
                 image_features = self.model.encode_image(image)
                 text_features = self.model.encode_text(text)
             text_features = torch.mean(text_features,dim=0).to(DEVICE)
-            text_features = text_features.to(DEVICE)
-
-            # text_selected = text_features[torch.randint(0, text_features.shape[0], (1,))]
-            # bbox = torch.tensor(bbox).unsqueeze(0).to(device)
-            # print(f"Image shape: {image_features.shape}, Text shape: {text_features.shape}")
-            # Combining embeddings with weighted average
-            # out = torch.add(0.4 * image_features ,0.6 * text_features)
+            # text_features = text_features.to(DEVICE).squeeze(0)
+            # image_features = image_features.to(DEVICE).squeeze(0)
+            # out = torch.cat((image_features, text_features),dim=0).to(DEVICE)
             
             # Combine image and text features and normalize
             product = torch.mul(image_features, text_features)
             power = torch.sign(product)* torch.sqrt(torch.abs(product))
             out = torch.div(power, torch.norm(power, dim=1).reshape(-1, 1))
             out =torch.mean(out,dim=0)
+
             # print(out.shape, power_out.shape)
             # append bbox
             # print(f"Output shape: {power_out.shape}")
